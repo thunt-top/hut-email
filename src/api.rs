@@ -5,6 +5,7 @@ use axum::response::{IntoResponse, Response};
 use governor::clock::{Clock, QuantaClock, QuantaInstant, Reference};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
+use tokio::sync::mpsc::error::TrySendError;
 use uuid::Uuid;
 
 use crate::sender::QueuedEmail;
@@ -48,6 +49,9 @@ struct TencentSendEmailPayload {
 pub enum ApiError {
     InvalidEmail(String),
     RateLimited(u64),
+    /// The send queue is full: the service is shedding load rather than
+    /// making clients wait indefinitely behind a slow SES upstream.
+    Overloaded,
     Internal(String),
 }
 
@@ -64,8 +68,17 @@ impl IntoResponse for ApiError {
                 StatusCode::TOO_MANY_REQUESTS,
                 json!({
                       "message": "rate limit exceeded for this recipient",
-                      "try_again_sec": sec,
+                      "try_again_sec": sec, // Prompt the user to try again later. Release server resource fast.
                 }),
+            ),
+            ApiError::Overloaded => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                json!(
+                    {
+                      "message": "mail service is busy, try again later",
+                      "try_again_sec": 30, // Prompt the user to try again later. Release server resource fast.
+                    }
+                ),
             ),
             ApiError::Internal(message) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -86,6 +99,8 @@ impl IntoResponse for ApiError {
 /// Validates and rate-limits the request, builds the signed SES request,
 /// hands it off to the send queue, and responds — all before the email is
 /// actually sent. The background worker in `sender` does the real send.
+/// If the queue is full the request is shed with `503 Service Unavailable`
+/// instead of blocking until a slot frees up.
 pub async fn send_email(
     State(state): State<AppState>,
     Json(req): Json<SendEmailRequest>,
@@ -131,15 +146,19 @@ pub async fn send_email(
     .map_err(|err| ApiError::Internal(err.to_string()))?;
 
     let id = Uuid::new_v4();
-    state
-        .queue_tx
-        .send(QueuedEmail {
-            id,
-            recipient: req.destination,
-            request,
-        })
-        .await
-        .map_err(|_| ApiError::Internal("send queue is closed".to_string()))?;
+    match state.queue_tx.try_send(QueuedEmail {
+        id,
+        recipient: req.destination,
+        request,
+    }) {
+        Ok(()) => {}
+        // Load shedding: fail fast with 503 rather than waiting for a free
+        // slot, so the client learns immediately that the email was not queued.
+        Err(TrySendError::Full(_)) => return Err(ApiError::Overloaded),
+        Err(TrySendError::Closed(_)) => {
+            return Err(ApiError::Internal("send queue is closed".to_string()));
+        }
+    }
 
     Ok((
         StatusCode::ACCEPTED,
