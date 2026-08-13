@@ -1,0 +1,4 @@
+# Normalize line endings to LF everywhere, even on Windows checkouts.
+# Scripts (scripts/deploy.sh) and the Dockerfile break if a shebang or
+# RUN line picks up a CRLF, so don't leave this to core.autocrlf.
+* text=auto eol=lf

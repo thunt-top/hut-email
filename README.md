@@ -63,6 +63,26 @@ docker compose down             # stop
 The container maps `39788:39788`. Log verbosity is controlled with
 `RUST_LOG` in `.env` (or `environment` in `compose.yaml`).
 
+### Release and deploy to production
+
+Production has no reliable direct connection to GitHub, so releases are built
+by CI and shipped over by hand from a bridge machine (one with access to both
+GitHub and production):
+
+1. Cut a release: `git tag vX.Y.Z && git push --tags`. The
+   [`release` workflow](.github/workflows/release.yml) builds the image on a
+   GitHub-hosted runner and attaches it (`docker save | gzip`) to a GitHub
+   Release — no secrets are needed for this step.
+2. From the bridge machine, run [`scripts/deploy.sh`](scripts/deploy.sh)
+   `[vX.Y.Z]` (defaults to the latest release). It downloads the image via
+   `gh`, copies it and `compose.yaml` to production over SSH, then loads and
+   restarts the container there.
+
+`.env` is created by hand directly on the production host (see
+[`.env.example`](.env.example)) and never leaves it — it isn't part of the
+release artifact or the deploy script, so secrets never transit GitHub or
+the bridge machine.
+
 ## CLI
 
 `examples/send_email_cli.rs` is a small client that posts to the service. It
