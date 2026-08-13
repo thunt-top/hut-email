@@ -1,0 +1,8 @@
+target
+.git
+.claude
+.env
+Dockerfile
+compose.yaml
+docker-compose.yml
+.dockerignore

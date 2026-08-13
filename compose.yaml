@@ -1,0 +1,12 @@
+services:
+  hut-email:
+    build: .
+    image: hut-email:latest
+    ports:
+      - "39788:39788"
+    env_file:
+      - .env
+    environment:
+      LISTEN_ADDR: "0.0.0.0:39788"
+      RUST_LOG: "${RUST_LOG:-info}"
+    restart: unless-stopped
