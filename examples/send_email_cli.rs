@@ -20,7 +20,7 @@
 use serde_json::{Value, json};
 use std::time::Duration;
 
-const DEFAULT_SUBJECT: &str = "HU&T Email Verification code";
+const DEFAULT_SUBJECT: &str = "HU&T Email Verification Code";
 const DEFAULT_ACTION: &str = "RESET YOUR PASSWORD";
 const DEFAULT_TEMPLATE_ID: u64 = 212086;
 const DEFAULT_URL: &str = "http://127.0.0.1:39788";
@@ -30,10 +30,10 @@ Usage:
   cargo run --example send_email_cli -- <destination> <verification_code> [options]
 
 Options:
-  --subject <s>       Email subject             [default: 重置密码]
-  --action <a>        Template \"action\" field   [default: RESET YOUR PASSWORD]
-  --template-id <n>   Tencent SES template ID   [default: 212086]
-  --url <u>           Service base URL          [default: http://127.0.0.1:39788]";
+  --subject        Email subject             [default: HU&T Email Verification Code]
+  --action         Template \"action\" field   [default: RESET YOUR PASSWORD]
+  --template-id    Tencent SES template ID   [default: 212086]
+  --url            Service base URL          [default: http://127.0.0.1:39788]";
 
 struct Args {
     destination: String,
