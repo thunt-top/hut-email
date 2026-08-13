@@ -6,6 +6,7 @@ use governor::clock::{Clock, QuantaClock, QuantaInstant, Reference};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use tokio::sync::mpsc::error::TrySendError;
+use tracing::{debug, error, warn};
 use uuid::Uuid;
 
 use crate::sender::QueuedEmail;
@@ -92,6 +93,12 @@ impl IntoResponse for ApiError {
         // branch on a single field regardless of the HTTP status code.
         body["status"] = json!("failed");
 
+        if status.is_server_error() {
+            error!(%status, body = %body, "request failed");
+        } else {
+            warn!(%status, body = %body, "request rejected");
+        }
+
         (status, Json(body)).into_response()
     }
 }
@@ -101,6 +108,11 @@ impl IntoResponse for ApiError {
 /// actually sent. The background worker in `sender` does the real send.
 /// If the queue is full the request is shed with `503 Service Unavailable`
 /// instead of blocking until a slot frees up.
+#[tracing::instrument(
+    name = "send_email",
+    skip_all,
+    fields(destination = %req.destination, template_id = req.template_id)
+)]
 pub async fn send_email(
     State(state): State<AppState>,
     Json(req): Json<SendEmailRequest>,
@@ -159,6 +171,7 @@ pub async fn send_email(
             return Err(ApiError::Internal("send queue is closed".to_string()));
         }
     }
+    debug!(id = %id, "queued for sending");
 
     Ok((
         StatusCode::ACCEPTED,

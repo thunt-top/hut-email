@@ -1,5 +1,6 @@
 use reqwest::{Client, Request};
 use tokio::sync::mpsc;
+use tracing::{error, info};
 use uuid::Uuid;
 
 /// A request that has already been built and signed, waiting to be sent.
@@ -22,7 +23,7 @@ pub async fn run(client: Client, mut queue: mpsc::Receiver<QueuedEmail>) {
         match client.execute(request).await {
             Ok(response) => log_ses_response(id, &recipient, response).await,
             Err(err) => {
-                eprintln!("[sender] {id} -> {recipient}: send failed: {err}");
+                error!(id = %id, recipient = %recipient, error = %err, "send failed");
             }
         }
     }
@@ -32,13 +33,16 @@ pub async fn run(client: Client, mut queue: mpsc::Receiver<QueuedEmail>) {
 // rejected templates) and reports errors inside the JSON body instead:
 // `{"Response":{"Error":{"Code":...,"Message":...}}}`. HTTP status alone
 // can't tell success from failure here.
+#[tracing::instrument(skip(response), fields(id = %id, recipient = %recipient))]
 async fn log_ses_response(id: Uuid, recipient: &str, response: reqwest::Response) {
     let http_status = response.status();
     let body = match response.text().await {
         Ok(body) => body,
         Err(err) => {
-            eprintln!(
-                "[sender] {id} -> {recipient}: sent (HTTP {http_status}) but failed to read the response body: {err}"
+            error!(
+                http_status = %http_status,
+                error = %err,
+                "sent but failed to read the response body"
             );
             return;
         }
@@ -50,11 +54,13 @@ async fn log_ses_response(id: Uuid, recipient: &str, response: reqwest::Response
 
     match error {
         None => {
-            eprintln!("[sender] {id} -> {recipient}: sent ({http_status})");
+            info!(http_status = %http_status, "sent");
         }
         Some(error) => {
-            eprintln!(
-                "[sender] {id} -> {recipient}: SES rejected the request (HTTP {http_status}): {error}"
+            error!(
+                http_status = %http_status,
+                ses_error = %error,
+                "SES rejected the request"
             );
         }
     }
