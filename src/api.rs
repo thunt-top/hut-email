@@ -129,6 +129,12 @@ pub async fn send_email(
     }
     let destination = state.email_map.resolve(&req.destination);
 
+    // We own the domain, and all valid receive address under the domain should
+    // have been redirected to some real email service.
+    if destination.ends_with("thunt.top") {
+        return Err(ApiError::InvalidEmail(req.destination));
+    }
+
     if let Err(ratelimited) = state.rate_limiter.check_key(&destination) {
         let possible_time: QuantaInstant = ratelimited.earliest_possible();
         // Nanos from now until the next conforming request, rounded up to
