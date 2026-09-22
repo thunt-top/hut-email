@@ -7,6 +7,18 @@ services:
     env_file:
       - .env
     environment:
+      # environment takes precedence over env_file; these are sane
+      # in-container defaults.
       LISTEN_ADDR: "0.0.0.0:39788"
       RUST_LOG: "${RUST_LOG:-info}"
+      CONFIG_DIR: "/app/config"
+    volumes:
+      # The whole config directory is bind-mounted read-only at runtime:
+      # config.toml, secret.toml and email_map.toml all come in via the mount
+      # and never enter image layers. Host-side edits take effect after
+      # `docker compose restart`.
+      # Mounting a directory (not single files) avoids docker turning a
+      # missing file path into a directory: a missing email_map.toml just
+      # warns and behaves as an empty table.
+      - ./config:/app/config:ro
     restart: unless-stopped

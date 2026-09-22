@@ -103,11 +103,12 @@ impl IntoResponse for ApiError {
     }
 }
 
-/// Validates and rate-limits the request, builds the signed SES request,
-/// hands it off to the send queue, and responds — all before the email is
-/// actually sent. The background worker in `sender` does the real send.
-/// If the queue is full the request is shed with `503 Service Unavailable`
-/// instead of blocking until a slot frees up.
+/// Validates, normalizes and rate-limits the request, builds the signed
+/// SES request, hands it off to the send queue, and responds — all before
+/// the email is actually sent. The destination is normalized (and possibly
+/// remapped via the email map) before rate limiting; the background worker
+/// in `sender` does the real send. If the queue is full the request is shed
+/// with `503 Service Unavailable` instead of blocking until a slot frees up.
 #[tracing::instrument(
     name = "send_email",
     skip_all,
@@ -121,7 +122,14 @@ pub async fn send_email(
         return Err(ApiError::InvalidEmail(req.destination));
     }
 
-    if let Err(ratelimited) = state.rate_limiter.check_key(&req.destination) {
+    // Normalization includes the optional address mapping: rate limits key
+    // on the resolved address, which is also where the email actually goes.
+    if let Some(target) = state.email_map.redirect_for(&req.destination) {
+        debug!(target, "recipient redirected by email map");
+    }
+    let destination = state.email_map.resolve(&req.destination);
+
+    if let Err(ratelimited) = state.rate_limiter.check_key(&destination) {
         let possible_time: QuantaInstant = ratelimited.earliest_possible();
         // Nanos from now until the next conforming request, rounded up to
         // whole seconds. Saturates to 0 if the window has already passed.
@@ -137,7 +145,7 @@ pub async fn send_email(
     let payload = TencentSendEmailPayload {
         from_email_address: state.from_address.to_string(),
         subject: req.subject,
-        destination: vec![req.destination.clone()],
+        destination: vec![destination.clone()],
         template: TencentTemplate {
             template_id: req.template_id,
             template_data,
@@ -160,7 +168,7 @@ pub async fn send_email(
     let id = Uuid::new_v4();
     match state.queue_tx.try_send(QueuedEmail {
         id,
-        recipient: req.destination,
+        recipient: destination,
         request,
     }) {
         Ok(()) => {}

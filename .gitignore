@@ -2,3 +2,7 @@
 assets/email_test.html
 assets/sample.sh
 .env
+# Real credentials are never committed (the config/secret.example.toml
+# template is committed).
+config/secret.toml
+config/email_map.toml

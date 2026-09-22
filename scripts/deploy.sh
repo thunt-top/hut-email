@@ -26,9 +26,13 @@ trap 'rm -rf "$WORKDIR"' EXIT
 gh release download "$TAG" --repo "$REPO" --pattern '*.tar.gz' --dir "$WORKDIR"
 ARCHIVE=$(ls "$WORKDIR"/*.tar.gz)
 
-ssh "$PROD_HOST" "mkdir -p '$PROD_DIR'"
+ssh "$PROD_HOST" "mkdir -p '$PROD_DIR/config'"
 rsync -avz "$ARCHIVE" "$PROD_HOST:$PROD_DIR/image.tar.gz"
 rsync -avz compose.yaml "$PROD_HOST:$PROD_DIR/compose.yaml"
+# Versioned, non-secret config ships with the deploy. config/secret.toml and
+# config/email_map.toml are environment-specific: they are created by hand on
+# the production host and never transit the bridge machine.
+rsync -avz config/config.toml "$PROD_HOST:$PROD_DIR/config/config.toml"
 
 ssh "$PROD_HOST" bash -s -- "$TAG" "$PROD_DIR" <<'EOF'
 set -euo pipefail

@@ -2,7 +2,8 @@
 
 A small proxy that turns a simple HTTP API into emails sent through
 [Tencent Cloud SES](https://www.tencentcloud.com/products/ses). It validates
-recipients, applies per-recipient rate limits, signs requests with the
+and normalizes recipients (optionally remapping them via an address mapping
+table), applies per-recipient rate limits, signs requests with the
 TC3-HMAC-SHA256 signature scheme, and hands them to a background worker that
 performs the actual send. Clients never touch Tencent credentials or the SES
 API directly.
@@ -12,30 +13,58 @@ authentication of its own — gate it at the network layer if that matters.
 
 - **Stack**: Rust, axum 0.8, tokio, reqwest (rustls), tracing
 - **Port**: `39788` by default
-- **Config**: environment variables (optionally from a `.env` file)
+- **Config**: TOML files under `config/`, plus a few environment overrides
 
 ## Deployment
 
 ### Configuration
 
-All settings come from environment variables. A `.env` file in the working
-directory is loaded automatically (see [`.env.example`](.env.example)).
+Configuration lives in TOML files under `config/` (directory overridable with
+`CONFIG_DIR`):
 
-| Variable | Required | Default | Purpose |
-| --- | --- | --- | --- |
-| `TENCENTCLOUD_SECRET_ID` | yes | — | Tencent Cloud API secret id, used to sign SES requests |
-| `TENCENTCLOUD_SECRET_KEY` | yes | — | Tencent Cloud API secret key, used to sign SES requests |
-| `SES_FROM_ADDRESS` | yes | — | Sender address; must be verified in the SES console |
-| `SES_ENDPOINT` | no | `ses.tencentcloudapi.com` | Tencent Cloud SES endpoint |
-| `SES_REGION` | no | `ap-hongkong` | Tencent Cloud region |
-| `LISTEN_ADDR` | no | `0.0.0.0:39788` | HTTP listen address |
-| `RATE_LIMIT_MAX_PER_HOUR` | no | `20` | Max queued sends per hour per recipient address |
-| `RUST_LOG` | no | `info` | Log filter (tracing `EnvFilter` syntax) |
+- `config/config.toml` — committed, non-secret settings (table below);
+- `config/secret.toml` — gitignored Tencent Cloud credentials; copy
+  [`config/secret.example.toml`](config/secret.example.toml) and fill in real
+  values;
+- `config/email_map.toml` — optional recipient address mapping: a validated
+  destination is normalized (trimmed, lowercased) and, if it matches a key,
+  the email is sent to the mapped value instead (format:
+  [`config/email_map.example.toml`](config/email_map.example.toml)). Missing
+  or unparseable → one warning, treated as an empty table.
+
+A `.env` file in the working directory is still loaded automatically, but it
+only carries the optional overrides listed below (see
+[`.env.example`](.env.example)).
+
+`config/config.toml`:
+
+| Key | Default | Purpose |
+| --- | --- | --- |
+| `from_address` | — (required) | Sender address; must be verified in the SES console |
+| `listen_addr` | `0.0.0.0:39788` | HTTP listen address (override with `LISTEN_ADDR`) |
+| `ses.endpoint` | `ses.tencentcloudapi.com` | Tencent Cloud SES endpoint |
+| `ses.region` | `ap-hongkong` | Tencent Cloud region |
+| `rate_limit.max_per_hour` | `20` | Max queued sends per hour per recipient address |
+
+`config/secret.toml`:
+
+| Key | Purpose |
+| --- | --- |
+| `secret_id` | Tencent Cloud API secret id, used to sign SES requests |
+| `secret_key` | Tencent Cloud API secret key, used to sign SES requests |
+
+Environment variables:
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `RUST_LOG` | `info` | Log filter (tracing `EnvFilter` syntax) |
+| `LISTEN_ADDR` | value from `config.toml` | Overrides the listen address |
+| `CONFIG_DIR` | `config` | Directory containing the TOML files |
 
 ### Run natively
 
 ```sh
-cp .env.example .env   # then fill in real values
+cp config/secret.example.toml config/secret.toml   # fill in real credentials
 cargo run --release
 ```
 
@@ -51,8 +80,9 @@ RUST_LOG=info,tower_http=debug cargo run --release    # + per-request HTTP logs
 The image is built in four stages with
 [cargo-chef](https://github.com/LukeMathWalker/cargo-chef) so dependency
 compilation is cached; the final stage is a minimal `alpine:3.21` image
-running an unprivileged user. `docker compose` injects the secrets from the
-local `.env` at runtime — they never enter the image.
+running an unprivileged user. The whole `config/` directory — including
+`secret.toml` — is bind-mounted read-only at runtime, so configuration never
+enters the image.
 
 ```sh
 docker compose up -d --build    # builds the image and starts the service
@@ -62,6 +92,13 @@ docker compose down             # stop
 
 The container maps `39788:39788`. Log verbosity is controlled with
 `RUST_LOG` in `.env` (or `environment` in `compose.yaml`).
+
+The `config/` directory is bind-mounted read-only (`./config` →
+`/app/config`) and re-read on restart. Mounting a directory instead of
+individual files means a missing `email_map.toml` simply results in the
+warn-and-continue behaviour — no docker-created-directory surprise. A missing
+`secret.toml` or `config.toml` is a hard startup error, with a message
+pointing at `config/secret.example.toml`.
 
 ### Release and deploy to production
 
@@ -78,10 +115,10 @@ GitHub and production):
    `gh`, copies it and `compose.yaml` to production over SSH, then loads and
    restarts the container there.
 
-`.env` is created by hand directly on the production host (see
-[`.env.example`](.env.example)) and never leaves it — it isn't part of the
-release artifact or the deploy script, so secrets never transit GitHub or
-the bridge machine.
+`config/secret.toml` and `config/email_map.toml` are created by hand directly
+on the production host and never leave it — they aren't part of the release
+artifact or the deploy script, so secrets never transit GitHub or the bridge
+machine. `config/config.toml` (non-secret) is shipped by the deploy script.
 
 ## CLI
 
@@ -121,11 +158,14 @@ prints a retry hint. A release build of the binary can be produced with
 
 There is one endpoint: `POST /send-email`.
 
-The service validates and rate-limits the request, builds and signs the
-underlying SES request, and pushes it onto the send queue — all before
-responding. The background worker in `src/sender.rs` performs the real send
-sequentially, so a `202` means *accepted for sending*, not *sent*. If the
-queue is full, the request is shed with `503` instead of blocking.
+The service validates the recipient, normalizes it (trimmed and lowercased;
+the optional email map may remap it to another address, and the mapping
+counts as part of normalization), and rate-limits on the resolved address.
+It then builds and signs the underlying SES request and pushes it onto the
+send queue — all before responding. The background worker in `src/sender.rs`
+performs the real send sequentially, so a `202` means *accepted for
+sending*, not *sent*. If the queue is full, the request is shed with `503`
+instead of blocking.
 
 ### Request
 
@@ -144,7 +184,7 @@ queue is full, the request is shed with `503` instead of blocking.
 | Field | Type | Notes |
 | --- | --- | --- |
 | `subject` | string | Email subject |
-| `destination` | string | Single recipient address; validated with a regex |
+| `destination` | string | Single recipient address; validated with a regex, then normalized and optionally remapped via the email map |
 | `template_id` | number | Tencent SES template id |
 | `template_data` | object | Optional (defaults to `{}`); serialized into SES's `TemplateData` string |
 
@@ -179,6 +219,6 @@ single field regardless of the HTTP status code.
 | Status | Body | Meaning |
 | --- | --- | --- |
 | `400` | `{"message":"invalid destination address: ...","status":"failed"}` | Destination failed validation |
-| `429` | `{"message":"rate limit exceeded for this recipient","try_again_sec":N,"status":"failed"}` | Per-recipient hourly quota exhausted; `try_again_sec` is when the next send should be allowed |
+| `429` | `{"message":"rate limit exceeded for this recipient","try_again_sec":N,"status":"failed"}` | Per-recipient hourly quota exhausted (keyed on the normalized, post-mapping address); `try_again_sec` is when the next send should be allowed |
 | `503` | `{"message":"server is busy, try again later","try_again_sec":30,"status":"failed"}` | Send queue full; the request was shed, retry later |
 | `500` | `{"message":"Internal error","detail":"...","status":"failed"}` | Server-side failure (e.g. queue closed, signing error) |

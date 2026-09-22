@@ -1,7 +1,11 @@
+# Build artifacts and VCS directories
 target
 .git
 .claude
+# Secrets never enter image layers (injected at runtime via docker compose).
 .env
+# Config is bind-mounted at runtime, never baked into the image.
+config/
 Dockerfile
 compose.yaml
 docker-compose.yml

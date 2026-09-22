@@ -1,0 +1,15 @@
+# Main service configuration (committed; contains no secrets).
+# See the "Configuration" section of README.md.
+
+from_address = "HU&T team <staff@no-reply.thunt.top>"
+
+# Listen address (overridable via the LISTEN_ADDR environment variable).
+listen_addr = "0.0.0.0:39788"
+
+[ses]
+endpoint = "ses.tencentcloudapi.com"
+region = "ap-hongkong"
+
+[rate_limit]
+# Max number of emails queued per hour per recipient address.
+max_per_hour = 20

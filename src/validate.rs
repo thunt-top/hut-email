@@ -21,6 +21,13 @@ pub fn is_valid_email(address: &str) -> bool {
     EMAIL_RE.is_match(address)
 }
 
+/// Canonical form used for rate-limit keys and email-map lookups: leading
+/// and trailing whitespace removed, lowercased. Case is insignificant for
+/// delivery, and by convention here for the local part too.
+pub fn normalize(address: &str) -> String {
+    address.trim().to_lowercase()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -39,5 +46,10 @@ mod tests {
         assert!(!is_valid_email("@missing-local.com"));
         assert!(!is_valid_email("no-dot-domain@localhost"));
         assert!(!is_valid_email("has spaces@example.com"));
+    }
+
+    #[test]
+    fn normalization_trims_and_lowercases() {
+        assert_eq!(normalize("  Aa@B-C.example.COM  "), "aa@b-c.example.com");
     }
 }

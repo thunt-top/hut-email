@@ -12,13 +12,13 @@
 //!
 //! Usage:
 //!   cargo run --example send_email_cli -- <destination> <verification_code> [options]
-//! 
+//!
 //! Options:
 //!   --subject        Email subject             [default: HU&T Email Verification Code]
 //!   --action         Template \"action\" field   [default: RESET YOUR PASSWORD]
 //!   --template-id    Tencent SES template ID   [default: 212086]
 //!   --url            Service base URL          [default: http://127.0.0.1:39788]
-//! 
+//!
 //! ```
 
 use serde_json::{Value, json};
